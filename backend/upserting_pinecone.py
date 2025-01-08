@@ -27,6 +27,33 @@ def save_processed_files(processed_data):
     with open(processed_files_path, 'w') as f:
         json.dump(processed_data, f)
 
+def verify_namespace_exists(index, namespace):
+    """Verify if a namespace exists in Pinecone"""
+    try:
+        # Try to get stats for the namespace
+        stats = index.describe_index_stats()
+        namespaces = stats.get('namespaces', {})
+        return namespace in namespaces
+    except Exception as e:
+        print(f"Error verifying namespace: {str(e)}")
+        return False
+
+def cleanup_processed_files():
+    """Remove records of files whose namespaces don't exist in Pinecone"""
+    index = pc.Index(index_name)
+    processed_data = load_processed_files()
+    files_to_remove = []
+    
+    for filename, data in processed_data['files'].items():
+        if not verify_namespace_exists(index, data['namespace']):
+            files_to_remove.append(filename)
+    
+    for filename in files_to_remove:
+        del processed_data['files'][filename]
+        print(f"Removed record for {filename} as namespace no longer exists")
+    
+    save_processed_files(processed_data)
+
 def initialize_pinecone():
     """Initialize Pinecone index if it doesn't exist"""
     spec = ServerlessSpec(cloud=cloud, region=region)
@@ -36,6 +63,9 @@ def initialize_pinecone():
         while not pc.describe_index(index_name).status['ready']:
             time.sleep(1)
         print(f"Index {index_name} created successfully")
+    
+    # Clean up any stale records
+    cleanup_processed_files()
     return pc.Index(index_name)
 
 def upsert_single_document(filename):
@@ -43,10 +73,16 @@ def upsert_single_document(filename):
     index = initialize_pinecone()
     processed_data = load_processed_files()
     
-    # Check if file was already processed
+    # Check if file was already processed and namespace still exists
     if filename in processed_data['files']:
-        print(f"File {filename} was already processed. Skipping...")
-        return
+        namespace = processed_data['files'][filename]['namespace']
+        if verify_namespace_exists(index, namespace):
+            print(f"File {filename} was already processed and namespace exists. Skipping...")
+            return
+        else:
+            # Namespace doesn't exist, remove from processed files
+            del processed_data['files'][filename]
+            save_processed_files(processed_data)
     
     # Assign new namespace
     namespace = f"document_{processed_data['next_namespace']}"
@@ -78,6 +114,7 @@ def upsert_single_document(filename):
     except Exception as e:
         print(f"Error processing {filename}: {str(e)}")
         raise
+
 
 def search_pinecone(query_embedding, top_k=5):
     """Search across all namespaces in Pinecone index"""

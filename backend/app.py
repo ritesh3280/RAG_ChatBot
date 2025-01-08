@@ -10,6 +10,8 @@ from flask_cors import CORS, cross_origin
 from embeddings_langchain import embed_query
 from upserting_pinecone import search_pinecone
 from upserting_pinecone import initialize_pinecone, upsert_single_document
+from querying import process_rag_query, format_response
+
 
 app = Flask(__name__)
 cors = CORS(app)
@@ -95,7 +97,6 @@ def upload_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/chat-bot", methods=["POST"])
 @cross_origin()
 def chat_bot():
@@ -121,62 +122,27 @@ def chat_bot():
         return jsonify({"answer": "No response found"})
 
 
-@app.route("/query", methods=["GET", "POST"])
+@app.route("/query", methods=["POST"])
 @cross_origin()
 def query():
     try:
-        # Log incoming request
-        print("Received request:", request.json)
-
-        # Get the query from the request
+        # Get query from request
         values = request.get_json()
         query_text = values.get("query")
-        print("Query Text:", query_text)
-
+        
         if not query_text:
             return jsonify({"error": "Missing 'query' in the request"}), 400
-
-        # Step 1: Embed the query
-        query_embedding = embed_query(query_text)  # Use LangChain to embed the query
-        print("Query Embedding:", query_embedding)
-
-        # Step 2: Search Pinecone for relevant context
-        search_results = search_pinecone(query_embedding)
-        print("Search Results:", search_results)
-
-        # Extract relevant text chunks from Pinecone search results
-        context = " ".join(
-            [match["metadata"]["text"] for match in search_results["matches"]]
-        )
-        print("Context:", context)
-
-        if not context:
-            return jsonify({"answer": "No relevant context found in the database."})
-
-        # Step 3: Use Gemini LLM to generate an answer
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
-        # Start the chat with context as system message
-        chat = model.start_chat(
-            history=[{"role": "system", "parts": [{"text": context}]}]
-        )
-
-        # Send the query with context to the model and receive the response
-        response = chat.send_message(query_text, stream=True)
-
-        # Collect response in chunks
-        full_response = ""
-        for chunk in response:
-            if chunk.text:
-                full_response += chunk.text
-
-        print("Full Response:", full_response)
-        return jsonify({"answer": full_response})
-
+            
+        # Process through RAG pipeline
+        rag_response = process_rag_query(query_text)
+        
+        # Format and return response
+        return jsonify(format_response(rag_response))
+        
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error processing query: {str(e)}")
         return jsonify({"error": "An error occurred during the query process."}), 500
+    
     
 
 if __name__ == "__main__":
