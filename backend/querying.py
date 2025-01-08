@@ -4,50 +4,103 @@ import os
 import google.generativeai as genai
 from embeddings_langchain import embed_query
 from upserting_pinecone import search_pinecone
+import re
 
+def is_general_question(query):
+    general_patterns = [
+        r'^hi\b|^hello\b|^hey\b',
+        r'what time|what date|what day',
+        r'weather|temperature|climate',
+        r'where is|location of',
+        r'how are you|who are you'
+    ]
+    return any(re.search(pattern, query.lower()) for pattern in general_patterns)
+
+def rerank_results(matches, query_text):
+    scored_chunks = []
+    for match in matches:
+        relevance_score = match['score']
+        text_chunk = match['metadata']['text']
+        
+        # Apply additional ranking factors
+        section_boost = 1.0
+        if text_chunk.startswith('## '):
+            section_boost = 1.2
+        
+        # Boost chunks containing query terms
+        query_terms = set(query_text.lower().split())
+        chunk_terms = set(text_chunk.lower().split())
+        term_overlap = len(query_terms.intersection(chunk_terms))
+        term_boost = 1.0 + (0.1 * term_overlap)
+        
+        final_score = relevance_score * section_boost * term_boost
+        scored_chunks.append({
+            'text': text_chunk,
+            'score': final_score,
+            'original_score': match['score']
+        })
+    
+    return sorted(scored_chunks, key=lambda x: x['score'], reverse=True)
 
 def process_rag_query(query_text):
-    """
-    Process a RAG query through the complete pipeline:
-    1. Embed the query
-    2. Search Pinecone for relevant context
-    3. Format context and query for LLM
-    4. Get LLM response
-    """
     try:
-        # Step 1: Embed the query
+        if is_general_question(query_text):
+            return {
+                "answer": "I am a resume-based assistant. Please ask questions related to the candidate's resume.",
+                "context_used": [],
+                "matches_scores": []
+            }
+        
         query_embedding = embed_query(query_text)
+        search_results = search_pinecone(query_embedding, top_k=15)
         
-        # Step 2: Search Pinecone with the embedding
-        search_results = search_pinecone(query_embedding, top_k=3)  # Get top 3 most relevant chunks
+        if not search_results['matches']:
+            return {
+                "answer": "I couldn't find relevant information in the resume to answer your question.",
+                "context_used": [],
+                "matches_scores": []
+            }
         
-        # Step 3: Format context from search results
-        context_chunks = [match['metadata']['text'] for match in search_results['matches']]
-        context = "\n\n".join(context_chunks)
+        # Rerank and filter results
+        reranked_results = rerank_results(search_results['matches'], query_text)
+        relevant_chunks = [
+            chunk for chunk in reranked_results
+            if chunk['score'] > 0.3
+        ][:5]
         
-        # Format the combined context and query for the LLM
-        prompt = f"""Please provide a detailed answer to the question based on the provided context. 
-        If the context doesn't contain relevant information to fully answer the question, 
-        acknowledge that and answer with what can be determined from the given context.
+        if not relevant_chunks:
+            return {
+                "answer": "I couldn't find sufficiently relevant information to answer your question accurately.",
+                "context_used": [],
+                "matches_scores": []
+            }
+        
+        # Format context with section headers and metadata
+        context = "\n\n".join([
+            f"{chunk['text']}" for chunk in relevant_chunks
+        ])
+        
+        prompt = f"""You are a professional resume analyzer. Answer the following question based on the resume sections provided:
 
-        Context:
-        {context}
+Context from Resume:
+{context}
 
-        Question: {query_text}
+Question: {query_text}
 
-        Answer:"""
+Requirements:
+- Answer specifically based on the provided resume sections
+- If the information isn't in the context, say so
+- Be concise and direct
+- Focus only on relevant details from the resume"""
         
-        # Step 4: Get LLM response
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        # Generate response
         response = model.generate_content(prompt)
         
         return {
             "answer": response.text,
-            "context_used": context_chunks,  # Optional: for debugging
-            "matches_scores": [match['score'] for match in search_results['matches']]  # Optional: for debugging
+            "context_used": [chunk['text'] for chunk in relevant_chunks],
+            "matches_scores": [chunk['score'] for chunk in relevant_chunks]
         }
         
     except Exception as e:
@@ -55,11 +108,17 @@ def process_rag_query(query_text):
         raise
 
 def format_response(rag_response):
-    """Format the RAG response for API return"""
+    confidence_score = 0
+    if rag_response["matches_scores"]:
+        weights = [1.2, 1.0, 0.8, 0.6, 0.4][:len(rag_response["matches_scores"])]
+        weighted_scores = sum(s * w for s, w in zip(rag_response["matches_scores"], weights))
+        confidence_score = weighted_scores / sum(weights[:len(rag_response["matches_scores"])])
+    
     return {
         "answer": rag_response["answer"],
         "metadata": {
             "context_used": rag_response["context_used"],
-            "relevance_scores": rag_response["matches_scores"]
+            "relevance_scores": rag_response["matches_scores"],
+            "confidence": confidence_score
         }
     }

@@ -87,15 +87,28 @@ def upload_file():
         )
         file.save(upload_path)
         
-        # Process only the new file
-        upsert_single_document(file.filename)
-        
-        return jsonify({
-            "message": "File uploaded and processed successfully",
-            "filename": file.filename
-        })
+        try:
+            # Process the file
+            upsert_single_document(file.filename)
+            
+            return jsonify({
+                "message": "File uploaded and processed successfully",
+                "filename": file.filename
+            })
+            
+        except Exception as processing_error:
+            # If processing fails, remove the uploaded file
+            if os.path.exists(upload_path):
+                os.remove(upload_path)
+            raise processing_error
+            
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_message = str(e)
+        print(f"Error processing upload: {error_message}")
+        return jsonify({
+            "error": "Failed to process file. Please ensure it's a valid PDF or text file.",
+            "details": error_message
+        }), 500
 
 @app.route("/chat-bot", methods=["POST"])
 @cross_origin()

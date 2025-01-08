@@ -4,6 +4,7 @@ import json
 from dotenv import load_dotenv
 from embeddings_langchain import get_embeddings_with_cleaning, getText, chunk_splitters, clean_text
 from pinecone import Pinecone, ServerlessSpec
+from embeddings_langchain import process_document
 
 load_dotenv()
 
@@ -69,38 +70,35 @@ def initialize_pinecone():
     return pc.Index(index_name)
 
 def upsert_single_document(filename):
-    """Upsert a single document with its own namespace"""
     index = initialize_pinecone()
     processed_data = load_processed_files()
     
-    # Check if file was already processed and namespace still exists
-    if filename in processed_data['files']:
-        namespace = processed_data['files'][filename]['namespace']
-        if verify_namespace_exists(index, namespace):
-            print(f"File {filename} was already processed and namespace exists. Skipping...")
-            return
-        else:
-            # Namespace doesn't exist, remove from processed files
-            del processed_data['files'][filename]
-            save_processed_files(processed_data)
-    
-    # Assign new namespace
     namespace = f"document_{processed_data['next_namespace']}"
     doc_path = os.path.join(documents_dir, filename)
     
     try:
-        # Process and upsert document
-        embeddings = get_embeddings_with_cleaning(doc_path)
-        text_chunks = chunk_splitters(clean_text(getText(doc_path)))
+        embeddings, text_chunks = process_document(doc_path)
         
-        upsert_data = [
-            {"id": f"{namespace}_{i}", "values": embeddings[i], "metadata": {"text": text_chunks[i]}}
-            for i in range(len(embeddings))
-        ]
+        # Create vectors with proper metadata
+        upsert_data = []
+        for i in range(len(embeddings)):
+            vector_data = {
+                "id": f"{namespace}_{i}",
+                "values": embeddings[i],
+                "metadata": {
+                    "text": text_chunks[i],
+                    "chunk_index": i,
+                    "filename": filename
+                }
+            }
+            upsert_data.append(vector_data)
         
-        index.upsert(vectors=upsert_data, namespace=namespace)
+        # Batch upsert in smaller chunks to avoid timeout
+        batch_size = 100
+        for i in range(0, len(upsert_data), batch_size):
+            batch = upsert_data[i:i + batch_size]
+            index.upsert(vectors=batch, namespace=namespace)
         
-        # Update processed files record
         processed_data['files'][filename] = {
             'namespace': namespace,
             'timestamp': time.time(),
@@ -109,11 +107,11 @@ def upsert_single_document(filename):
         processed_data['next_namespace'] += 1
         save_processed_files(processed_data)
         
-        print(f"Successfully upserted {filename} to namespace {namespace}")
-        
+        print(f"Successfully upserted {filename} with {len(upsert_data)} vectors to namespace {namespace}")
     except Exception as e:
         print(f"Error processing {filename}: {str(e)}")
         raise
+
 
 
 def search_pinecone(query_embedding, top_k=5):
