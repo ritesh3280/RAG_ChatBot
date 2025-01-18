@@ -110,29 +110,29 @@ def upload_file():
             "details": error_message
         }), 500
 
-@app.route("/chat-bot", methods=["POST"])
-@cross_origin()
-def chat_bot():
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel("gemini-1.5-flash")
+# @app.route("/chat-bot", methods=["POST"])
+# @cross_origin()
+# def chat_bot():
+#     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+#     model = genai.GenerativeModel("gemini-1.5-flash")
 
-    values = request.get_json()
-    prompt = values.get("question")
+#     values = request.get_json()
+#     prompt = values.get("question")
 
-    chat_history.append({"role": "user", "parts": [{"text": prompt}]})
-    chat = model.start_chat(history=chat_history)
-    response = chat.send_message(prompt, stream=True)
+#     chat_history.append({"role": "user", "parts": [{"text": prompt}]})
+#     chat = model.start_chat(history=chat_history)
+#     response = chat.send_message(prompt, stream=True)
 
-    full_response = ""
-    for chunk in response:
-        if chunk.text:
-            chat_history.append({"role": "assistant", "parts": [{"text": chunk.text}]})
-            full_response += chunk.text
+#     full_response = ""
+#     for chunk in response:
+#         if chunk.text:
+#             chat_history.append({"role": "assistant", "parts": [{"text": chunk.text}]})
+#             full_response += chunk.text
 
-    if full_response:
-        return jsonify({"answer": full_response})
-    else:
-        return jsonify({"answer": "No response found"})
+#     if full_response:
+#         return jsonify({"answer": full_response})
+#     else:
+#         return jsonify({"answer": "No response found"})
 
 
 @app.route("/query", methods=["POST"])

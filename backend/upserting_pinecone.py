@@ -2,7 +2,7 @@ import os
 import time
 import json
 from dotenv import load_dotenv
-from embeddings_langchain import get_embeddings_with_cleaning, getText, chunk_splitters, clean_text
+from embeddings_langchain import getText, chunk_splitters
 from pinecone import Pinecone, ServerlessSpec
 from embeddings_langchain import process_document
 
@@ -17,21 +17,18 @@ region = 'us-east-1'
 index_name = "langchain-rag"
 
 def load_processed_files():
-    """Load the list of processed files and their namespaces"""
     if os.path.exists(processed_files_path):
         with open(processed_files_path, 'r') as f:
             return json.load(f)
     return {'files': {}, 'next_namespace': 0}
 
 def save_processed_files(processed_data):
-    """Save the updated list of processed files"""
     with open(processed_files_path, 'w') as f:
         json.dump(processed_data, f)
 
 def verify_namespace_exists(index, namespace):
-    """Verify if a namespace exists in Pinecone"""
     try:
-        # Try to get stats for the namespace
+
         stats = index.describe_index_stats()
         namespaces = stats.get('namespaces', {})
         return namespace in namespaces
@@ -40,7 +37,6 @@ def verify_namespace_exists(index, namespace):
         return False
 
 def cleanup_processed_files():
-    """Remove records of files whose namespaces don't exist in Pinecone"""
     index = pc.Index(index_name)
     processed_data = load_processed_files()
     files_to_remove = []
@@ -56,7 +52,6 @@ def cleanup_processed_files():
     save_processed_files(processed_data)
 
 def initialize_pinecone():
-    """Initialize Pinecone index if it doesn't exist"""
     spec = ServerlessSpec(cloud=cloud, region=region)
     
     if index_name not in pc.list_indexes().names():
@@ -65,7 +60,6 @@ def initialize_pinecone():
             time.sleep(1)
         print(f"Index {index_name} created successfully")
     
-    # Clean up any stale records
     cleanup_processed_files()
     return pc.Index(index_name)
 
@@ -78,8 +72,9 @@ def upsert_single_document(filename):
     
     try:
         embeddings, text_chunks = process_document(doc_path)
+        # Printing processed for testing
+        print(f"Processed {filename} with {len(embeddings)} vectors")
         
-        # Create vectors with proper metadata
         upsert_data = []
         for i in range(len(embeddings)):
             vector_data = {
@@ -91,13 +86,19 @@ def upsert_single_document(filename):
                     "filename": filename
                 }
             }
+            # Printing upserting for testing
+            print(f"Upserting vector {i} for {filename}")
             upsert_data.append(vector_data)
+            # Printing upserted for testing
+            print(f"Upserted vector {i} for {filename}")
         
-        # Batch upsert in smaller chunks to avoid timeout
-        batch_size = 100
+        batch_size = 16
         for i in range(0, len(upsert_data), batch_size):
             batch = upsert_data[i:i + batch_size]
+            # Printing upserting batch for testing
+            print(f"Upserting batch {i} to {i + batch_size} for {filename}")
             index.upsert(vectors=batch, namespace=namespace)
+            
         
         processed_data['files'][filename] = {
             'namespace': namespace,
@@ -115,14 +116,11 @@ def upsert_single_document(filename):
 
 
 def search_pinecone(query_embedding, top_k=5):
-    """Search across all namespaces in Pinecone index"""
     index = pc.Index(index_name)
     
-    # Get all namespaces
     processed_data = load_processed_files()
     namespaces = [data['namespace'] for data in processed_data['files'].values()]
     
-    # Search in each namespace and combine results
     all_results = []
     for namespace in namespaces:
         results = index.query(
@@ -133,12 +131,10 @@ def search_pinecone(query_embedding, top_k=5):
         )
         all_results.extend(results['matches'])
     
-    # Sort by score and get top_k results
     all_results.sort(key=lambda x: x['score'], reverse=True)
     return {'matches': all_results[:top_k]}
 
 def delete_document(filename):
-    """Delete a document's vectors from its namespace"""
     processed_data = load_processed_files()
     if filename in processed_data['files']:
         namespace = processed_data['files'][filename]['namespace']

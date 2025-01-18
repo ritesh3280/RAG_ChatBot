@@ -9,13 +9,11 @@ function ChatBot() {
   const handleSend = async () => {
     if (input.trim() === "") return;
 
-    // Add user message to chat
     const userMessage = { text: input, sender: "user" };
     setMessages([...messages, userMessage]);
     setIsLoading(true);
 
     try {
-      // Make RAG query instead of regular chat
       const response = await fetch("http://127.0.0.1:5000/query", {
         method: "POST",
         headers: {
@@ -30,7 +28,6 @@ function ChatBot() {
         throw new Error(data.error);
       }
 
-      // Add bot response with context
       const botMessage = {
         text: data.answer,
         sender: "bot",
@@ -40,7 +37,6 @@ function ChatBot() {
 
       setMessages((prevMessages) => [...prevMessages, botMessage]);
     } catch (error) {
-      // Handle errors gracefully
       const errorMessage = {
         text: "Sorry, I encountered an error. Please try again.",
         sender: "bot",
