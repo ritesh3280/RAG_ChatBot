@@ -6,16 +6,6 @@ from embeddings_langchain import embed_query
 from upserting_pinecone import search_pinecone
 import re
 
-def is_general_question(query):
-    general_patterns = [
-        r'^hi\b|^hello\b|^hey\b',
-        r'what time|what date|what day',
-        r'weather|temperature|climate',
-        r'where is|location of',
-        r'how are you|who are you'
-    ]
-    return any(re.search(pattern, query.lower()) for pattern in general_patterns)
-
 def rerank_results(matches, query_text):
     scored_chunks = []
     for match in matches:
@@ -44,12 +34,6 @@ def rerank_results(matches, query_text):
 
 def process_rag_query(query_text):
     try:
-        if is_general_question(query_text):
-            return {
-                "answer": "I am a resume-based assistant. Please ask questions related to the candidate's resume.",
-                "context_used": [],
-                "matches_scores": []
-            }
         
         query_embedding = embed_query(query_text)
         search_results = search_pinecone(query_embedding, top_k=15)

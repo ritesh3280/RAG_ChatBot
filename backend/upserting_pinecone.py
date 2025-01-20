@@ -77,13 +77,16 @@ def upsert_single_document(filename):
         
         upsert_data = []
         for i in range(len(embeddings)):
+            flattened_embedding = embeddings[i] if isinstance(embeddings[i], list) and not isinstance(embeddings[i][0], list) else embeddings[i][0]
             vector_data = {
                 "id": f"{namespace}_{i}",
-                "values": embeddings[i],
+                "values": flattened_embedding,
                 "metadata": {
+                    "filename": filename,
+                    "person_name": text_chunks[0].split("\n")[1].strip(),
                     "text": text_chunks[i],
                     "chunk_index": i,
-                    "filename": filename
+                    "section" : text_chunks[i].split("\n")[0].split(":")[1].strip(),
                 }
             }
             # Printing upserting for testing
@@ -92,12 +95,16 @@ def upsert_single_document(filename):
             # Printing upserted for testing
             print(f"Upserted vector {i} for {filename}")
         
+        print("Length of upsert data : ", len(upsert_data))
+        
         batch_size = 16
         for i in range(0, len(upsert_data), batch_size):
             batch = upsert_data[i:i + batch_size]
             # Printing upserting batch for testing
             print(f"Upserting batch {i} to {i + batch_size} for {filename}")
             index.upsert(vectors=batch, namespace=namespace)
+            # printing upserted for testing
+            print(f"Upserted batch {i} to {i + batch_size} for {filename}")
             
         
         processed_data['files'][filename] = {

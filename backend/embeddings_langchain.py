@@ -90,19 +90,24 @@ def chunk_splitters(text):
     
     markdown_splitters = MarkdownHeaderTextSplitter(headers_to_split_on)
     md_header_splits = markdown_splitters.split_text(text)
-    
     chunks = []
+    first_replacement_done = False
     for chunk in md_header_splits:
         try:
-            page_content = getattr(chunk, "page_content")
-            section = chunk.metadata.get('Section', None)
-            if page_content:
-                chunks.append({"page_content": page_content, "section": section})
-            else:
-                print("No page content")
+            page_content = getattr(chunk, "page_content", None)
+            section = getattr(chunk, "metadata", {}).get("Section", None)
+            
+            if section is None and not first_replacement_done:
+                page_content = f"Section: Name, Contact and Socials\n{page_content}"
+                section = "Name, Contact and Socials"
+                first_replacement_done = True
+            elif section is not None:
+                page_content = f"Section: {section}\n{page_content}"
+
+            chunks.append(page_content)
         except Exception as e:
             print(f"Error processing chunk: {str(e)}")
-
+    
     return chunks
 
 gpt4all_embd = GPT4AllEmbeddings()
@@ -111,10 +116,11 @@ def get_embeddings(texts):
     embeddings = []
     try:
         for chunk in texts:
-            page_content = chunk.get('page_content', '')
+            # page_content = chunk.get('page_content', '')
 
-            embedding = gpt4all_embd.embed_documents([page_content])
-            embeddings.append(embedding)
+            embedding = gpt4all_embd.embed_documents([chunk])
+            flattened_embedding = embedding[0] if isinstance(embedding, list) and isinstance(embedding[0], list) else embedding
+            embeddings.append(flattened_embedding)
 
         return embeddings
     except Exception as e:
