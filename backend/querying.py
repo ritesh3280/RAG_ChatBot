@@ -106,3 +106,5 @@ def format_response(rag_response):
             "confidence": confidence_score
         }
     }
+
+
