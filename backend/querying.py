@@ -6,37 +6,9 @@ from embeddings_langchain import embed_query
 from upserting_pinecone import search_pinecone
 import re
 
-def rerank_results(matches, query_text):
-    scored_chunks = []
-    for match in matches:
-        relevance_score = match['score']
-        text_chunk = match['metadata']['text']
-        
-        # Apply additional ranking factors
-        section_boost = 1.0
-        if text_chunk.startswith('## '):
-            section_boost = 1.2
-        
-        # Boost chunks containing query terms
-        query_terms = set(query_text.lower().split())
-        chunk_terms = set(text_chunk.lower().split())
-        term_overlap = len(query_terms.intersection(chunk_terms))
-        term_boost = 1.0 + (0.1 * term_overlap)
-        
-        final_score = relevance_score * section_boost * term_boost
-        scored_chunks.append({
-            'text': text_chunk,
-            'score': final_score,
-            'original_score': match['score']
-        })
-    
-    return sorted(scored_chunks, key=lambda x: x['score'], reverse=True)
-
 def process_rag_query(query_text):
     try:
-        
-        query_embedding = embed_query(query_text)
-        search_results = search_pinecone(query_embedding, top_k=15)
+        search_results = search_pinecone(query_text, top_k=15)
         
         if not search_results['matches']:
             return {
@@ -45,12 +17,13 @@ def process_rag_query(query_text):
                 "matches_scores": []
             }
         
-        # Rerank and filter results
-        reranked_results = rerank_results(search_results['matches'], query_text)
-        relevant_chunks = [
-            chunk for chunk in reranked_results
-            if chunk['score'] > 0.3
-        ][:5]
+        relevant_chunks = []
+        for chunk in search_results['matches']:
+            print(chunk['score'])
+            if chunk['score'] > 0.1:
+                relevant_chunks.append(chunk)
+
+        relevant_chunks = relevant_chunks[:5]
         
         if not relevant_chunks:
             return {
@@ -61,7 +34,7 @@ def process_rag_query(query_text):
         
         # Format context with section headers and metadata
         context = "\n\n".join([
-            f"{chunk['text']}" for chunk in relevant_chunks
+            f"{chunk['metadata']['text']}" for chunk in relevant_chunks
         ])
         
         prompt = f"""You are a professional resume analyzer. Answer the following question based on the resume sections provided:
@@ -83,7 +56,7 @@ Requirements:
         
         return {
             "answer": response.text,
-            "context_used": [chunk['text'] for chunk in relevant_chunks],
+            "context_used": [chunk['metadata']['text'] for chunk in relevant_chunks],
             "matches_scores": [chunk['score'] for chunk in relevant_chunks]
         }
         

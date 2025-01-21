@@ -7,6 +7,7 @@ from pinecone import Pinecone, ServerlessSpec
 from embeddings_langchain import process_document
 from embeddings_langchain import GPT4AllEmbeddings
 import google.generativeai as genai
+import re
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -143,36 +144,51 @@ def upsert_single_document(filename):
 
 # Gives relevant sections by quering prompt into LLM
 def determine_relevant_sections(query_text):
-
     sections_array = load_sections_array()
+    print(f"Sections Array: {sections_array}") # For testing
     prompt = f"Given the following sections {sections_array}, which ones are relevant to the question: '{query_text}'? Respond with a comma-separated list."
+    response = llm.generate_content(prompt)
     try:
-        response = llm.generate_content(prompt)
-        relevant_sections = response.text.strip().split(", ")
-        print(relevant_sections)
+        if hasattr(response, 'text'):
+            response_text = response.text.strip()  # Extract and strip any extra whitespace
+            
+            # This regular expression splits the text by commas but ensures sections like "Name, Contact and Socials" remain intact.
+            relevant_sections = re.findall(r'([^,]+(?:, [^,]+)*)', response_text)
+            
+            print(f"Relevant sections: {relevant_sections}") # For testing
+            return relevant_sections
+        else:
+            raise ValueError("Response object does not contain 'text' attribute")
     except Exception as e:
         print(f"Error determining relevant sections: {str(e)}")
         return []
 
-def search_pinecone(query_embedding, top_k=5):
+def search_pinecone(query_text, top_k=5):
     index = pc.Index(index_name)
     
+    relevant_sections = determine_relevant_sections(query_text)
+    print(f"Relevant sections: {relevant_sections}") # For testing
+
     processed_data = load_processed_files()
     namespaces = [data['namespace'] for data in processed_data['files'].values()]
     
     all_results = []
     for namespace in namespaces:
         results = index.query(
-            vector=query_embedding,
+            vector=embed_query(query_text),
             top_k=top_k,
             namespace=namespace,
             include_metadata=True
         )
-        all_results.extend(results['matches'])
+
+        filtered_results = [
+            match for match in results['matches']
+            if match['metadata']['section'] in relevant_sections
+        ]
+        all_results.extend(filtered_results)
     
     all_results.sort(key=lambda x: x['score'], reverse=True)
-    # should be return
-    print ({'matches': all_results[:top_k]})
+    return ({'matches': filtered_results[:top_k]})
 
 def delete_document(filename):
     processed_data = load_processed_files()
@@ -206,3 +222,6 @@ def load_sections_array():
             return eval(content)
     except (SyntaxError, FileNotFoundError):
         return []
+    
+# determine_relevant_sections("Does Ritesh have any work experience?")  # Testing
+search_pinecone("Does Ritesh have any work experience?", top_k=5)
