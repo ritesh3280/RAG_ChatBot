@@ -167,28 +167,37 @@ def search_pinecone(query_text, top_k=5):
     index = pc.Index(index_name)
     
     relevant_sections = determine_relevant_sections(query_text)
-    print(f"Relevant sections: {relevant_sections}") # For testing
+    print(f"Relevant sections: {relevant_sections}")  # For testing
 
     processed_data = load_processed_files()
     namespaces = [data['namespace'] for data in processed_data['files'].values()]
     
     all_results = []
-    for namespace in namespaces:
-        results = index.query(
-            vector=embed_query(query_text),
-            top_k=top_k,
-            namespace=namespace,
-            include_metadata=True
-        )
-
-        filtered_results = [
-            match for match in results['matches']
-            if match['metadata']['section'] in relevant_sections
-        ]
-        all_results.extend(filtered_results)
+    filtered_results = []  # Initialize filtered_results before the loop
     
-    all_results.sort(key=lambda x: x['score'], reverse=True)
-    return ({'matches': filtered_results[:top_k]})
+    for namespace in namespaces:
+        try:
+            results = index.query(
+                vector=embed_query(query_text),
+                top_k=top_k,
+                namespace=namespace,
+                include_metadata=True
+            )
+
+            # Filter the results based on relevant sections
+            filtered_results.extend([
+                match for match in results['matches']
+                if match['metadata']['section'] in relevant_sections
+            ])
+        except Exception as e:
+            print(f"Error querying namespace {namespace}: {str(e)}")
+    
+    # Sort the results based on the score
+    filtered_results.sort(key=lambda x: x['score'], reverse=True)
+
+    # Return the top_k results
+    return {'matches': filtered_results[:top_k]}
+
 
 def delete_document(filename):
     processed_data = load_processed_files()
