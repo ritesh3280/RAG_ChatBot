@@ -142,20 +142,27 @@ def upsert_single_document(filename):
         print(f"Error processing {filename}: {str(e)}")
         raise
 
-# Gives relevant sections by quering prompt into LLM
 def determine_relevant_sections(query_text):
     sections_array = load_sections_array()
-    print(f"Sections Array: {sections_array}") # For testing
+    sections_array_lower = {section.strip().lower() for section in sections_array}  # Normalized set for validation
+    print(f"Sections Array: {sections_array}")  # For testing
+    
     prompt = f"Given the following sections {sections_array}, which ones are relevant to the question: '{query_text}'? Respond with a comma-separated list."
     response = llm.generate_content(prompt)
+    
     try:
         if hasattr(response, 'text'):
-            response_text = response.text.strip()  # Extract and strip any extra whitespace
-            
-            # This regular expression splits the text by commas but ensures sections like "Name, Contact and Socials" remain intact.
+            response_text = response.text.strip()
+            # Split response into sections, handling possible commas within section names
             relevant_sections = re.findall(r'([^,]+(?:, [^,]+)*)', response_text)
-            
-            print(f"Relevant sections: {relevant_sections}") # For testing
+            # Trim whitespace and filter out invalid sections
+            relevant_sections = [section.strip() for section in relevant_sections]
+            # Validate against sections_array to remove hallucinations or typos
+            relevant_sections = [
+                section for section in relevant_sections
+                if section.lower() in sections_array_lower
+            ]
+            print(f"Relevant sections: {relevant_sections}")  # For testing
             return relevant_sections
         else:
             raise ValueError("Response object does not contain 'text' attribute")
@@ -167,13 +174,15 @@ def search_pinecone(query_text, top_k=5):
     index = pc.Index(index_name)
     
     relevant_sections = determine_relevant_sections(query_text)
-    print(f"Relevant sections: {relevant_sections}")  # For testing
+    print(f"Relevant sections (normalized): {relevant_sections}")  # For testing
 
     processed_data = load_processed_files()
     namespaces = [data['namespace'] for data in processed_data['files'].values()]
     
-    all_results = []
-    filtered_results = []  # Initialize filtered_results before the loop
+    filtered_results = []
+    
+    # making sections lowercase and removing whitespace for ease and comparision
+    relevant_sections_normalized = {section.strip().lower() for section in relevant_sections} if relevant_sections else set()
     
     for namespace in namespaces:
         try:
@@ -183,21 +192,26 @@ def search_pinecone(query_text, top_k=5):
                 namespace=namespace,
                 include_metadata=True
             )
-
-            # Filter the results based on relevant sections
-            filtered_results.extend([
-                match for match in results['matches']
-                if match['metadata']['section'] in relevant_sections
-            ])
+            
+            # If there are no relevant sections
+            if not relevant_sections or 'None' in relevant_sections:
+                filtered_results.extend(results['matches'])
+            else:
+                # Check each match with the stripped section(normalized)
+                for match in results['matches']:
+                    match_section = match.get('metadata', {}).get('section', '')
+                    # Stripping metadata section for comparision
+                    match_section_normalized = match_section.strip().lower()
+                    if match_section_normalized in relevant_sections_normalized:
+                        filtered_results.append(match)
         except Exception as e:
             print(f"Error querying namespace {namespace}: {str(e)}")
     
-    # Sort the results based on the score
+    # Sort results by score in descending order
     filtered_results.sort(key=lambda x: x['score'], reverse=True)
-
-    # Return the top_k results
+    
+    print(f"Filtered results: {filtered_results}")  # For testing
     return {'matches': filtered_results[:top_k]}
-
 
 def delete_document(filename):
     processed_data = load_processed_files()
@@ -232,5 +246,3 @@ def load_sections_array():
     except (SyntaxError, FileNotFoundError):
         return []
     
-# determine_relevant_sections("Does Ritesh have any work experience?")  # Testing
-search_pinecone("Does Ritesh have any work experience?", top_k=5)

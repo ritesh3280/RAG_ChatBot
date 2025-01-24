@@ -4,11 +4,23 @@ from pinecone import Pinecone
 import google.generativeai as genai
 import re
 from upserting_pinecone import search_pinecone
-from flask import jsonify
-
+from sentence_transformers import SentenceTransformer
 
 history = []
+
+class QueryEmbedder:
+    def __init__(self, model_name='all-MiniLM-L6-v2'):
+        self.model = SentenceTransformer(model_name)
+
+    def embed_query(self, query):
+        return self.model.encode(query, normalize_embeddings=True)
+    
 def process_rag_query(query_text):
+
+    embedder = QueryEmbedder()
+    query_embedding = embedder.embed_query(query_text)
+
+    search_results = search_pinecone(query_embedding, top_k=15)
     global history
     try:
         search_results = search_pinecone(query_text, top_k=15)
