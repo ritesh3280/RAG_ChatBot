@@ -3,72 +3,65 @@ from dotenv import load_dotenv
 from pinecone import Pinecone
 import google.generativeai as genai
 import re
-from upserting_pinecone import search_pinecone
+from upserting_pinecone import search_pinecone, determine_general_questions
 from sentence_transformers import SentenceTransformer
 
 history = []
 
-class QueryEmbedder:
-    def __init__(self, model_name='all-MiniLM-L6-v2'):
-        self.model = SentenceTransformer(model_name)
-
-    def embed_query(self, query):
-        return self.model.encode(query, normalize_embeddings=True)
-    
 def process_rag_query(query_text):
-
-    embedder = QueryEmbedder()
-    query_embedding = embedder.embed_query(query_text)
-
-    search_results = search_pinecone(query_embedding, top_k=15)
     global history
     try:
-        search_results = search_pinecone(query_text, top_k=15)
+        # First determine if it's a general question
+        is_general = determine_general_questions(query_text)
         
-        if not search_results['matches']:
-            return {
-                "answer": "I couldn't find relevant information in the resume to answer your question.",
-                "context_used": [],
-                "matches_scores": [],
-                "history": history
-            }
-        
-        relevant_chunks = []
-        for chunk in search_results['matches']:
-            if chunk['score'] > 0.1:
-                relevant_chunks.append(chunk)
-
-        relevant_chunks = relevant_chunks[:5]
-        
-        if not relevant_chunks:
-            return {
-                "answer": "I couldn't find sufficiently relevant information to answer your question accurately.",
-                "context_used": [],
-                "matches_scores": [],
-                "history": history
-            }
-        
-        context = "\n\n".join([
-            chunk['metadata']['text'] for chunk in relevant_chunks
-        ])
-
-        #  history formatting
-        previous_history = ""
-        if history:
+        if is_general:
+            # Handle general question path
             previous_history = "\n\n".join([
-                f"Q: {entry['question']}\nA: Based on context: {entry['context']}"
+                f"Q: {entry['question']}\nA: {entry['context']}"
                 for entry in history[-5:]
-            ])
+            ]) if history else ""
 
-        prompt = f"""You are an experienced HR professional and career advisor who specializes in resume analysis. Your role is to provide detailed insights based on the resume sections provided.
+            general_prompt = f"""Answer the question
 
-Context from Resume:
-{context}
-
-Previous History:
+Previous Conversation:
 {previous_history}
 
 Current Question: {query_text}
+
+Guidelines:
+1. Be concise and to the point
+2. Maintain professional but friendly tone"""
+
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(general_prompt)
+            
+            answer_text = response.candidates[0].content.parts[0].text
+        else:
+            # Original resume-specific processing
+            search_results = search_pinecone(query_text, top_k=15)
+            
+            if not search_results['matches']:
+                return error_response("I couldn't find relevant resume information.", history)
+            
+            relevant_chunks = [chunk for chunk in search_results['matches'] if chunk['score'] > 0][:5]
+            
+            if not relevant_chunks:
+                return error_response("Insufficient relevant resume information.", history)
+            
+            context = "\n\n".join(chunk['metadata']['text'] for chunk in relevant_chunks)
+            previous_history = format_history(history)
+
+            # Modified prompt for resume-specific answers
+            prompt = f"""You are an experienced HR recruiter and career advisor who specializes in resume analysis. 
+                        
+Resume Context:
+{context}
+
+Conversation History:
+{previous_history}
+
+Question: {query_text}
 
 Instructions:
 - Review the provided history if it's relevant to the current question
@@ -114,32 +107,44 @@ Instructions:
                         Remember: Quality over quantity - provide comprehensive answers when needed but prioritize relevance and precision."""
 
 
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            answer_text = response.candidates[0].content.parts[0].text
 
-        text = response.candidates[0].content.parts[0].text
-        history.append({
+        # Update shared history
+        history_entry = {
             'question': query_text,
-            'context': text
-        })
-        
+            'context': answer_text,
+            'type': 'general' if is_general else 'resume-specific'
+        }
+        history = history[-4:] + [history_entry]  # Keep last 5 entries
+
         return {
-            "answer": response.text,
-            "context_used": [chunk['metadata']['text'] for chunk in relevant_chunks],
-            "matches_scores": [chunk['score'] for chunk in relevant_chunks],
+            "answer": answer_text,
+            "context_used": [] if is_general else [chunk['metadata']['text'] for chunk in relevant_chunks],
+            "matches_scores": [] if is_general else [chunk['score'] for chunk in relevant_chunks],
             "history": history
         }
-        
+
     except Exception as e:
         print(f"Error in RAG pipeline: {str(e)}")
-        return {
-            "answer": "An error occurred while processing your question. Please try again.",
-            "context_used": [],
-            "matches_scores": [],
-            "history": history
-        }
-    
+        return error_response("Error processing question", history)
+
+# Helper functions
+def error_response(message, history):
+    return {
+        "answer": message,
+        "context_used": [],
+        "matches_scores": [],
+        "history": history
+    }
+
+def format_history(history):
+    return "\n\n".join(
+        f"Q: {entry['question']}\nA: {entry['context']}" 
+        for entry in history[-5:]
+    ) if history else ""
 
 def format_response(rag_response):
     confidence_score = 0

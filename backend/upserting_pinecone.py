@@ -142,6 +142,48 @@ def upsert_single_document(filename):
         print(f"Error processing {filename}: {str(e)}")
         raise
 
+# Trying to determine general questions
+def determine_general_questions(query_text):
+    prompt = prompt = f"""Analyze this question to determine if it requires specific resume information or is general career knowledge:
+
+Question: '{query_text}'
+
+Decision Framework:
+1. Consider 'True' (general) if it:
+   - Asks about general career advice/industry trends
+   - Requests HR best practices/interview techniques
+   - Seeks common resume formatting guidelines
+   - Inquires about typical job requirements
+   - Discusses employment laws/policies
+   - Uses phrases like "in general", "typically", or "usually"
+
+2. Consider 'False' (resume-specific) if it:
+   - References specific resume sections (Experience, Projects, etc.)
+   - Asks about particular skills/technologies
+   - Requests details about employment timeline
+   - Seeks quantifiable achievements
+   - Uses possessive pronouns ("the candidate's", "their")
+   - Asks "Does the resume show..." or similar
+
+Edge Cases:
+- Questions about resume writing = General (True)
+- Questions requiring personal data = Resume-specific (False)
+- Hybrid questions = Prioritize resume-specific (False)
+
+Response Format: ONLY 'true' or 'false' in lowercase, no commentary."""
+
+    response = llm.generate_content(prompt)
+    try:
+        if hasattr(response, 'text'):
+            response_text = response.text.strip()
+            print(f"General question response: {response_text}")
+            return response_text.lower() == 'true'
+        else:
+            raise ValueError("Response object does not contain 'text' attribute")
+    except Exception as e:
+        print(f"Error determining general question: {str(e)}")
+        return False
+
 def determine_relevant_sections(query_text):
     sections_array = load_sections_array()
     sections_array_lower = {section.strip().lower() for section in sections_array}  # Normalized set for validation
@@ -246,3 +288,4 @@ def load_sections_array():
     except (SyntaxError, FileNotFoundError):
         return []
     
+determine_general_questions("What is the Ritesh's full name?")
